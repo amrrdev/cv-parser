@@ -110,13 +110,56 @@ def extract_text(file_path: str) -> str:
             doc = Document(file_path)
             return "\n".join([para.text for para in doc.paragraphs])
         if file_path.endswith('.pdf'):
-            reader = PdfReader(file_path)
-            text = ''
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + '\n'
-            return text
+            pypdf2_text = None
+            try:
+                reader = PdfReader(file_path)
+                text = ''
+                for page in reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + '\n'
+                if text.strip():
+                    pypdf2_text = text
+                    logger.info(f"PyPDF2 extracted {len(text)} chars")
+            except Exception as pypdf_err:
+                logger.warning(f"PyPDF2 failed: {pypdf_err}")
+            
+            if pypdf2_text and len(pypdf2_text.strip()) > 50:
+                logger.info("Using PyPDF2 result")
+                return pypdf2_text
+            
+            try:
+                import pdfplumber
+                text = ''
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        words = page.extract_words(x_tolerance=2, y_tolerance=3, keep_blank_chars=False)
+                        if words:
+                            text += reconstruct_text_from_words(words) + '\n'
+                if text.strip():
+                    logger.info(f"pdfplumber extracted {len(text)} chars using extract_words")
+                    return text
+            except Exception as plumber_err:
+                logger.warning(f"pdfplumber extract_words failed: {plumber_err}, trying extract_text")
+                try:
+                    import pdfplumber
+                    text = ''
+                    with pdfplumber.open(file_path) as pdf:
+                        for page in pdf.pages:
+                            page_text = page.extract_text(layout=True)
+                            if page_text:
+                                text += page_text + '\n'
+                    if text.strip():
+                        logger.info(f"pdfplumber extracted {len(text)} chars using extract_text")
+                        return text
+                except Exception as plumber_err2:
+                    logger.warning(f"pdfplumber extract_text also failed: {plumber_err2}")
+            
+            if pypdf2_text:
+                logger.info("Falling back to PyPDF2 result")
+                return pypdf2_text
+                
+            raise ValueError(f"Unable to extract text from PDF")
         elif ext in ['.docx', '.doc']:
             return extract_text_from_docx(file_path)
         elif file_path.endswith('.txt'):
@@ -127,6 +170,42 @@ def extract_text(file_path: str) -> str:
     except Exception as e:
         logger.error(f"Error extracting text from {file_path}: {str(e)}")
         raise
+
+
+def reconstruct_text_from_words(words: List[dict]) -> str:
+    """Reconstruct text from pdfplumber words with proper spacing based on positions"""
+    if not words:
+        return ""
+    
+    lines = []
+    current_line = []
+    prev_y = words[0]['top']
+    prev_x = words[0]['x1']
+    
+    for word in words:
+        text = word['text']
+        x0 = word['x0']
+        top = word['top']
+        x1 = word['x1']
+        
+        if abs(top - prev_y) > 3:
+            lines.append(' '.join(current_line))
+            current_line = [text]
+            prev_x = x1
+        else:
+            gap = x0 - prev_x
+            if gap > 8:
+                current_line.append(' ' + text)
+            else:
+                current_line.append(text)
+            prev_x = x1
+        
+        prev_y = top
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    return '\n'.join(lines)
 
 """Text Cleaning & Tokenization"""
 
@@ -645,6 +724,26 @@ def extract_experience(text: str) -> List[Dict]:
         if location_match:
             location = location_match.group(1)
 
+        # Extract description (bullet points after first line)
+        description = ""
+        entry_lines = entry.split('\n')
+        if len(entry_lines) > 1:
+            # Get all lines after the first one that are bullet points or descriptions
+            desc_lines = []
+            for i in range(1, len(entry_lines)):
+                line = entry_lines[i].strip()
+                # Skip standalone location/type lines
+                if re.search(r'^\s*(Remote|On-?site|Hybrid)\s*$', line, re.IGNORECASE):
+                    continue
+                if line.startswith(('–', '-', '•', '*')):
+                    # Remove bullet character and clean
+                    desc_lines.append(line.lstrip('–-•*').strip())
+                elif line and len(line) > 5:
+                    # Regular description lines
+                    desc_lines.append(line)
+            if desc_lines:
+                description = ' '.join(desc_lines)
+
         # Calculate years
         start, end = parse_duration(duration_str)
         years = calculate_duration(start, end)
@@ -656,7 +755,8 @@ def extract_experience(text: str) -> List[Dict]:
                 'duration': duration_str,
                 'location': location,
                 'job_type': job_type,
-                'years': years
+                'years': years,
+                'description': description if description else None
             })
 
     return experiences
@@ -904,7 +1004,7 @@ def parse_cv(file_path: str) -> Optional[Dict]:
 
         logger.info(f"✅ Successfully parsed CV:")
         logger.info(f"   - Skills: {len(output_data['skills'])}")
-        logger.info(f"   - Job Titles: {len(output_data.get('title', ''))}")
+        logger.info(f"   - Job Titles: {len(output_data.get('title') or '')}")
         logger.info(f"   - Experience Entries: {len(output_data['workExperience'])}")
         logger.info(f"   - Education Entries: {len(output_data['education'])}")
 

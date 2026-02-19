@@ -96,10 +96,21 @@ def parse_cv(request: ParseCVRequest):
         
         temp_file_path = save_temp_file(cv_content, request.jobSeekerId)
         
-        result = cv_parser.parse_cv_file(temp_file_path)
+        result = cv_parser.parse_cv(temp_file_path)
         
         if result is None:
-            raise HTTPException(status_code=422, detail="Failed to parse CV file")
+            logger.warning(f"CV parsing returned no data for jobSeekerId: {request.jobSeekerId}")
+            return ParseCVResponse(
+                jobSeekerId=request.jobSeekerId,
+                parsedAt=datetime.now().isoformat(),
+                data={
+                    "error": "Unable to extract text from CV. The file may be corrupted, encrypted, or in an unsupported format.",
+                    "personalInfo": {},
+                    "skills": [],
+                    "education": [],
+                    "workExperience": []
+                }
+            )
         
         logger.info(f"Successfully parsed CV for jobSeekerId: {request.jobSeekerId}")
         
