@@ -1,0 +1,8 @@
+.cache/
+**/huggingface/
+**/torch/
+**/sentence_transformers/
+*.json
+__pycache__/
+.venv
+cv_venc

@@ -1,0 +1,14 @@
+sentence-transformers
+spacy
+nltk
+pdfplumber
+PyPDF2
+python-docx
+pandas
+dateparser
+torch
+fastapi
+uvicorn
+httpx
+python-dotenv
+
