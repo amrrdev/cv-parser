@@ -339,19 +339,20 @@ def extract_summary(text: str) -> str:
 
     return ""
 
-def extract_skills_optimized(text: str, similarity_threshold: float = 0.60) -> List[str]:
+def extract_skills_with_confidence(text: str, similarity_threshold: float = 0.60) -> List[Dict]:
     """
     Extract skills using BOTH keyword matching and semantic similarity
+    Returns list of dicts with name and confidence
     """
-    found_skills = set()
+    found_skills = {}  # skill_name -> confidence
     text_lower = text.lower()
 
-    # Method 1: Direct keyword matching (fast and accurate)
+    # Method 1: Direct keyword matching (fast and accurate) - high confidence
     for skill in skills_list:
         skill_lower = skill.lower()
         pattern = r'\b' + re.escape(skill_lower) + r'\b'
         if re.search(pattern, text_lower):
-            found_skills.add(skill)
+            found_skills[skill] = 0.95  # High confidence for direct match
 
     # Method 2: Semantic similarity for variations
     if len(found_skills) < 10:
@@ -359,10 +360,15 @@ def extract_skills_optimized(text: str, similarity_threshold: float = 0.60) -> L
         similarities = util.cos_sim(text_emb, skills_embeddings)[0]
 
         for i, score in enumerate(similarities):
+            skill_name = skills_list[i]
             if score > similarity_threshold:
-                found_skills.add(skills_list[i])
+                if skill_name not in found_skills:
+                    found_skills[skill_name] = float(score)
 
-    return sorted(list(found_skills))
+    # Convert to list of dicts sorted by confidence
+    result = [{"name": name, "confidence": round(conf, 2)} 
+              for name, conf in found_skills.items()]
+    return sorted(result, key=lambda x: x['confidence'], reverse=True)
 
 def extract_job_titles_optimized(text: str, similarity_threshold: float = 0.65) -> List[str]:
     """Extract job titles using keyword matching and similarity"""
@@ -597,17 +603,31 @@ def extract_experience(text: str) -> List[Dict]:
         first_line = entry.split('\n')[0]
 
         # Remove date from first line to get title
-        title = re.sub(duration_pattern, '', first_line, flags=re.IGNORECASE).strip()
-        title = re.sub(r'\s+', ' ', title)  # Clean extra spaces
+        first_line_clean = re.sub(duration_pattern, '', first_line, flags=re.IGNORECASE).strip()
+        first_line_clean = re.sub(r'\s+', ' ', first_line_clean)  # Clean extra spaces
 
-        # Extract company using NER but filter tech keywords
-        doc = nlp(entry)
-        companies = [ent.text for ent in doc.ents
-                    if ent.label_ == 'ORG' and
-                    ent.text.lower() not in TECH_KEYWORDS ]
-        # Extract company
-#         companies = [ent.text for ent in doc.ents if ent.label_ == 'ORG']
-
+        # Try to split title and company - look for patterns like "Title at Company" or "Title - Company"
+        title = first_line_clean
+        company = ""
+        
+        # Pattern: "Title – Company" or "Title - Company" or "Title at Company"
+        title_company_match = re.match(r'^(.+?)(?:\s*[-–—]\s*|\s+at\s+)(.+)$', first_line_clean, re.IGNORECASE)
+        if title_company_match:
+            title = title_company_match.group(1).strip()
+            company = title_company_match.group(2).strip()
+        
+        # If no company found, try NER but be more careful
+        if not company:
+            doc = nlp(entry)
+            orgs = [ent.text for ent in doc.ents if ent.label_ == 'ORG']
+            # Filter out tech keywords and short orgs
+            org_list = [org for org in orgs 
+                       if org.lower() not in TECH_KEYWORDS 
+                       and len(org) > 2
+                       and org.lower() != title.lower()]
+            if org_list:
+                company = org_list[0]
+        
         # Detect job type
         job_type = "Full-time"
         if re.search(r'\bIntern\b|\bInternship\b', entry, re.IGNORECASE):
@@ -629,10 +649,10 @@ def extract_experience(text: str) -> List[Dict]:
         start, end = parse_duration(duration_str)
         years = calculate_duration(start, end)
 
-        if title or companies:
+        if title or company:
             experiences.append({
                 'title': title,
-                'company': companies[0] if companies else "",
+                'company': company,
                 'duration': duration_str,
                 'location': location,
                 'job_type': job_type,
@@ -640,8 +660,196 @@ def extract_experience(text: str) -> List[Dict]:
             })
 
     return experiences
+ 
+def parse_date_to_yyyy_mm_dd(date_str: str) -> str:
+    """Parse various date formats and return YYYY-MM-DD format"""
+    if not date_str:
+        return ""
+    
+    date_str = date_str.strip()
+    
+    # Try different patterns
+    patterns = [
+        (r'(\d{4})-(\d{1,2})-(\d{1,2})', '%Y-%m-%d'),  # YYYY-MM-DD
+        (r'(\d{1,2})/(\d{1,2})/(\d{4})', '%m/%d/%Y'),  # MM/DD/YYYY
+        (r'(\d{1,2})-(\d{1,2})-(\d{4})', '%m-%d-%Y'),  # MM-DD-YYYY
+        (r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s,]+(\d{4})', '%b %Y'),  # Month YYYY
+        (r'(\d{4})', '%Y'),  # Just year
+    ]
+    
+    for pattern, fmt in patterns:
+        match = re.search(pattern, date_str, re.IGNORECASE)
+        if match:
+            try:
+                if fmt == '%Y':
+                    return match.group(1)
+                elif fmt == '%b %Y':
+                    month_str = match.group(1)
+                    year = match.group(2)
+                    month_num = {'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+                                 'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+                                 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'}
+                    return f"{year}-{month_num.get(month_str.lower()[:3], '01')}-01"
+                else:
+                    dt = datetime.strptime(match.group(0), fmt)
+                    return dt.strftime('%Y-%m-%d')
+            except:
+                pass
+    
+    return date_str
 
-"""Main CV Parsing Function"""
+def transform_to_output_format(cv_data: Dict) -> Dict:
+    """Transform extracted data to the output format specified in CONTEXT.md"""
+    
+    # Extract name parts
+    name = cv_data.get('name', '')
+    if name:
+        parts = name.strip().split()
+        first_name = parts[0] if parts else ""
+        last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+    else:
+        first_name, last_name = "", ""
+    
+    # Get contact info
+    emails = cv_data.get('email', [])
+    phones = cv_data.get('phone', [])
+    linkedins = cv_data.get('linkedin', [])
+    githubs = cv_data.get('github', [])
+    
+    # Clean phone - take first valid phone
+    phone = ""
+    if phones:
+        phone = phones[0].replace('\n', ' ').replace('  ', ' ').strip()
+    
+    # Transform education
+    education_list = []
+    for edu in cv_data.get('education', []):
+        degree_str = edu.get('degree', '')
+        degree_type = "OTHER"
+        
+        degree_lower = degree_str.lower()
+        if 'bachelor' in degree_lower or 'b.sc' in degree_lower or 'bs' in degree_lower:
+            degree_type = "BACHELOR"
+        elif 'master' in degree_lower or 'm.sc' in degree_lower or 'ms' in degree_lower:
+            degree_type = "MASTER"
+        elif 'phd' in degree_lower or 'ph.d' in degree_lower or 'doctor' in degree_lower:
+            degree_type = "PHD"
+        elif 'associate' in degree_lower:
+            degree_type = "ASSOCIATE"
+        elif 'high school' in degree_lower:
+            degree_type = "HIGH_SCHOOL"
+        
+        # Parse years - handle "2022 - 2026" format
+        year_str = edu.get('year', '')
+        start_date = ""
+        end_date = ""
+        is_current = False
+        
+        if year_str:
+            parts = re.split(r'[-–—to]+', year_str)
+            if len(parts) >= 1:
+                start_date = parse_date_to_yyyy_mm_dd(parts[0].strip())
+            if len(parts) >= 2:
+                end_str = parts[1].strip()
+                if any(word in end_str.lower() for word in ['present', 'current', 'now']):
+                    is_current = True
+                else:
+                    end_date = parse_date_to_yyyy_mm_dd(end_str)
+        
+        # Extract field of study from degree string
+        field_of_study = degree_str
+        for prefix in ['Bachelor - ', 'Master - ', 'Bachelor of ', 'Master of ']:
+            field_of_study = field_of_study.replace(prefix, '')
+        
+        education_list.append({
+            "institutionName": edu.get('school', ''),
+            "degreeType": degree_type,
+            "fieldOfStudy": field_of_study.strip(),
+            "startDate": start_date,
+            "endDate": end_date if end_date else None,
+            "isCurrent": is_current,
+            "gpa": float(edu.get('gpa', '')) if edu.get('gpa') else None,
+            "description": None
+        })
+    
+    # Transform work experience
+    work_experience_list = []
+    work_preference = "ANY"
+    
+    for exp in cv_data.get('experience', []):
+        duration_str = exp.get('duration', '')
+        start_date = ""
+        end_date = ""
+        is_current = False
+        
+        if duration_str:
+            parts = re.split(r'[-–—]+', duration_str)
+            if len(parts) >= 1:
+                start_date = parse_date_to_yyyy_mm_dd(parts[0].strip())
+            if len(parts) >= 2:
+                end_str = parts[1].strip()
+                if any(word in end_str.lower() for word in ['present', 'current', 'now']):
+                    is_current = True
+                else:
+                    end_date = parse_date_to_yyyy_mm_dd(end_str)
+        
+        # Get work preference from location
+        location = exp.get('location', '')
+        if location:
+            loc_lower = location.lower()
+            if 'remote' in loc_lower:
+                work_preference = 'REMOTE'
+            elif 'hybrid' in loc_lower:
+                work_preference = 'HYBRID'
+            elif 'onsite' in loc_lower or 'on-site' in loc_lower:
+                work_preference = 'ONSITE'
+        
+        work_experience_list.append({
+            "companyName": exp.get('company', ''),
+            "jobTitle": exp.get('title', ''),
+            "location": location if location else None,
+            "startDate": start_date,
+            "endDate": end_date if end_date else None,
+            "isCurrent": is_current,
+            "description": exp.get('description')
+        })
+    
+    # Transform skills
+    skills_list = cv_data.get('skills', [])
+    
+    # Get job title
+    job_titles = cv_data.get('job_titles', [])
+    title = job_titles[0] if job_titles else None
+    
+    # Calculate years of experience
+    years_of_exp = cv_data.get('total_experience_years', 0.0)
+    
+    # Build output according to CONTEXT.md schema
+    output = {
+        "personalInfo": {
+            "firstName": first_name,
+            "lastName": last_name,
+            "email": emails[0] if emails else "",
+            "phone": phone,
+            "location": "",
+            "linkedinUrl": linkedins[0] if linkedins else None,
+            "githubUrl": githubs[0] if githubs else None,
+            "portfolioUrl": None
+        },
+        "professionalSummary": cv_data.get('summary', ''),
+        "title": title,
+        "education": education_list,
+        "workExperience": work_experience_list,
+        "skills": skills_list,
+        "expectedSalary": None,
+        "workPreference": work_preference,
+        "yearsOfExperience": years_of_exp if years_of_exp > 0 else None,
+        "noticePeriod": None,
+        "availabilityStatus": None
+    }
+    
+    return output
+
 
 def parse_cv(file_path: str) -> Optional[Dict]:
     """
@@ -676,7 +884,7 @@ def parse_cv(file_path: str) -> Optional[Dict]:
             "summary": extract_summary(text),
             "education": extract_education(text),
             "experience": extract_experience(text),
-            "skills": extract_skills_optimized(cleaned_text),
+            "skills": extract_skills_with_confidence(cleaned_text),
             "job_titles": extract_job_titles_optimized(cleaned_text),
             "total_experience_years": 0.0
         }
@@ -685,19 +893,22 @@ def parse_cv(file_path: str) -> Optional[Dict]:
         total_exp = sum(exp.get('years', 0.0) for exp in cv_data['experience'])
         cv_data['total_experience_years'] = round(total_exp, 1)
 
-        # 5. Validation
+        # 5. Transform to output format
+        output_data = transform_to_output_format(cv_data)
+
+        # 6. Validation
         if not cv_data['name']:
             logger.warning("⚠️ Could not extract candidate name")
         if not cv_data['email']:
             logger.warning("⚠️ Could not extract email address")
 
         logger.info(f"✅ Successfully parsed CV:")
-        logger.info(f"   - Skills: {len(cv_data['skills'])}")
-        logger.info(f"   - Job Titles: {len(cv_data['job_titles'])}")
-        logger.info(f"   - Experience Entries: {len(cv_data['experience'])}")
-        logger.info(f"   - Education Entries: {len(cv_data['education'])}")
+        logger.info(f"   - Skills: {len(output_data['skills'])}")
+        logger.info(f"   - Job Titles: {len(output_data.get('title', ''))}")
+        logger.info(f"   - Experience Entries: {len(output_data['workExperience'])}")
+        logger.info(f"   - Education Entries: {len(output_data['education'])}")
 
-        return cv_data
+        return output_data
 
     except Exception as e:
         logger.error(f"❌ Error parsing CV: {str(e)}", exc_info=True)
