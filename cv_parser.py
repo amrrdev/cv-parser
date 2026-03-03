@@ -101,6 +101,7 @@ nltk.download("wordnet")
 nltk.download("averaged_perceptron_tagger")
 
 """Input Handling"""
+# i edited here
 def extract_text(file_path: str) -> str:
     """Extract text from PDF, DOCX, TXT files"""
     try:
@@ -329,67 +330,85 @@ def extract_name(text: str) -> str:
             return ent.text
 
     return ""
+# i edited here
+def normalize_phone(raw: str) -> str:
+    raw = re.sub(r'\s+', '', raw)  # remove spaces/newlines
+    if raw.startswith('+'):
+        return '+' + re.sub(r'\D', '', raw[1:])
+    return re.sub(r'\D', '', raw)
 
 def extract_contact_info(text: str) -> Dict[str, List[str]]:
-    """Extract all contact information with improved patterns"""
     emails = list(set(re.findall(email_pattern, text)))
 
-    # Phone extraction with better filtering
-    phone_matches = re.findall(phone_pattern, text)
-    # Filter out numbers that appear in URLs or are too short
+    # More reliable phone extraction: find candidates then normalize
+    phone_candidates = re.findall(r'(\+?\d[\d\s().-]{8,}\d)', text)
     phones = []
-    for phone in phone_matches:
-        clean_phone = re.sub(r'[^\d+]', '', phone)
-        if len(clean_phone) >= 10 and 'linkedin' not in text[max(0, text.find(phone)-20):text.find(phone)+20].lower():
-            phones.append(phone.strip())
-
+    for p in phone_candidates:
+        # keep digits and leading +
+        normalized = re.sub(r'(?!^\+)[^\d]', '', p.strip())
+        # Egyptian/international numbers often 10-15 digits (excluding +)
+        digits_only = re.sub(r'\D', '', normalized)
+        if 10 <= len(digits_only) <= 15:
+            phones.append(p.strip())
+    phones = [normalize_phone(p) for p in phones]
+    phones = [p for p in phones if 10 <= len(re.sub(r'\D', '', p)) <= 15]
     return {
-        'email': emails,
-        'phone': list(set(phones)),
-        'linkedin': list(set(re.findall(linkedin_pattern, text, re.IGNORECASE))),
-        'github': list(set(re.findall(github_pattern, text, re.IGNORECASE)))
+        "email": emails,
+        "phone": sorted(set(phones)),
+        "linkedin": sorted(set(re.findall(linkedin_pattern, text, re.IGNORECASE))),
+        "github": sorted(set(re.findall(github_pattern, text, re.IGNORECASE))),
     }
-
+# i edited here
 def extract_summary(text: str) -> str:
-    """Extract professional summary with improved detection"""
     summary_keywords = [
         'summary', 'objective', 'profile', 'about', 'overview',
         'professional summary', 'career objective', 'career profile',
         'personal statement', 'executive summary', 'professional profile'
     ]
 
+    section_headers = {
+        "education", "experience", "work experience", "employment", "employment history",
+        "projects", "skills", "technical skills", "certifications", "contact"
+    }
+
+    def normalize_header(s: str) -> str:
+        s = s.strip().lower()
+        s = re.sub(r'[_\-=*\s:|]+', ' ', s)   # normalize separators to spaces
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
     lines = text.split('\n')
-    
-    # First pass: look for explicit summary section headers
+
     for i, line in enumerate(lines):
         line_lower = line.lower().strip()
-        
-        # Check if line contains any summary keyword
-        if any(kw in line_lower for kw in summary_keywords):
-            # This might be a section header
+
+        # normalize: "summary_____": -> "summary"
+        normalized = re.sub(r'[_\-=*\s:|]+', '', line_lower)
+
+        if any(re.sub(r'[^a-z]', '', kw) in normalized for kw in summary_keywords):
             summary_lines = []
-            
-            # Collect lines after the header
-            for j in range(i + 1, min(i + 15, len(lines))):
+            for j in range(i + 1, min(i + 900, len(lines))):
                 next_line = lines[j].strip()
-                
-                # Stop at next section
-                if any(keyword in next_line.lower() for keyword in 
-                       ['education', 'experience', 'work', 'technical skills', 
-                        'skills', 'employment', 'history', 'certification', 
-                        'projects', 'languages', 'contact']):
-                    if len(next_line) < 30:  # Only stop on short section headers
-                        break
-                
-                # Include meaningful lines
-                if next_line and len(next_line) > 10:
-                    summary_lines.append(next_line)
-                    if len(' '.join(summary_lines)) > 400:
-                        break
-            
-            if summary_lines:
-                return ' '.join(summary_lines)
-    
+
+                # skip empty or separator-only lines
+                if not next_line:
+                    continue
+                if re.match(r'^[-_=*]{3,}$', next_line):
+                    continue
+
+                # ✅ stop at next section header (ONLY if the line is just a header)
+                header = normalize_header(next_line)
+                if header in section_headers and len(header) <= 40:
+                    break
+
+                summary_lines.append(next_line)
+                if len(' '.join(summary_lines)) > 700:
+                    break
+
+            return ' '.join(summary_lines).strip()
+
+    return ""
+
     # Second pass: look for content at the beginning before education/experience
     # This catches CVs without explicit summary headers
     first_section_idx = min(

@@ -11,4 +11,5 @@ uvicorn
 httpx
 python-dotenv
 pydantic
-
+torch
+numpy
