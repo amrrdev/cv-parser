@@ -28,7 +28,7 @@ def clamp01(x: float) -> float:
 def experience_score(candidate_years: float, job_years: float) -> float:
     """
     Rules:
-    - If job experience is None → score = 0.0
+    - If job experience is None → score = None
     - Otherwise → min(candidate / job, 1)
     """
 
