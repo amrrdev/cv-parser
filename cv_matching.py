@@ -28,13 +28,13 @@ def clamp01(x: float) -> float:
 def experience_score(candidate_years: float, job_years: float) -> float:
     """
     Rules:
-    - If job experience is None → score = 1.0
+    - If job experience is None → score = 0.0
     - Otherwise → min(candidate / job, 1)
     """
 
     # ✅ If job does NOT require experience
     if job_years is None:
-        return 1.0
+        return None
 
     try:
         c = float(candidate_years or 0.0)
@@ -47,7 +47,7 @@ def experience_score(candidate_years: float, job_years: float) -> float:
         return 1.0
 
     if j <= 0:
-        return 1.0
+        return 0.0
 
     return min(c / j, 1.0)
 
@@ -137,19 +137,19 @@ class SimilaritySkillMatcher:
     ) -> Dict[str, Any]:
         exp_score = experience_score(
             candidate_payload.get("totalExperience", 0),
-            job_payload.get("totalExperience", 0),
+            job_payload.get("totalExperience", None),
         )
 
         s_score, matches = self.skills_score(candidate_payload, job_payload)
-        if exp_score == 1.0:
+        if exp_score == None:
             final = s_score
         else:
-            final = 0.7 * exp_score + 0.3 * s_score
+            final = max((0.7 * exp_score ),0.4)+ 0.3 * s_score
 
         return {
-            "experience_score_0to1": exp_score,
-            "final_score_0to1": clamp01(final),
-            "skills_score_0to1": s_score,
+            "experience_score": exp_score,
+            "final_score": clamp01(final),
+            "skills_score": s_score,
             "matches": matches,
         }
 
@@ -157,7 +157,7 @@ class SimilaritySkillMatcher:
 if __name__ == "__main__":
     # Candidate payload (can include verified)
     candidate = {
-        "totalExperience": 1.7,
+        "totalExperience": 0.0,
         "skills": [
             {"skillName": "Node", "verified": True},
             {"skillName": "Express.js", "verified": False},
