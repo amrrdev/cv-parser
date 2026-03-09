@@ -13,3 +13,4 @@ python-dotenv
 pydantic
 torch
 numpy
+psycopg[binary]

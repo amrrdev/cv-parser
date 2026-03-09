@@ -57,8 +57,15 @@ class SimilaritySkillMatcher:
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         similarity_threshold: float = 0.60,
+        local_files_only: bool = False,
     ):
-        self.model = SentenceTransformer(model_name)
+        try:
+            self.model = SentenceTransformer(model_name, local_files_only=local_files_only)
+        except Exception:
+            if local_files_only:
+                raise
+            # If the model was downloaded before, fall back to the local cache.
+            self.model = SentenceTransformer(model_name, local_files_only=True)
         self.threshold = float(similarity_threshold)
 
     def skills_score(

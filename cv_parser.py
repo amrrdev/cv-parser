@@ -93,12 +93,22 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Download NLTK data
-nltk.download('stopwords', quiet=True)
-nltk.download("punkt")
-nltk.download("punkt_tab")
-nltk.download("wordnet")
-nltk.download("averaged_perceptron_tagger")
+def ensure_nltk_resource(resource_path: str, download_name: str) -> None:
+    try:
+        nltk.data.find(resource_path)
+    except LookupError:
+        try:
+            nltk.download(download_name, quiet=True)
+        except Exception as exc:
+            logger.warning(f"Unable to download NLTK resource '{download_name}': {exc}")
+
+
+# Download NLTK data only when not already available locally.
+ensure_nltk_resource("corpora/stopwords", "stopwords")
+ensure_nltk_resource("tokenizers/punkt", "punkt")
+ensure_nltk_resource("tokenizers/punkt_tab", "punkt_tab")
+ensure_nltk_resource("corpora/wordnet", "wordnet")
+ensure_nltk_resource("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger")
 
 """Input Handling"""
 # i edited here
@@ -225,8 +235,16 @@ def split_sentences(text: str) -> List[str]:
 
 logger.info("Loading models...")
 try:
-    sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
-    nlp = spacy.load("en_core_web_sm")
+    parser_model_name = os.getenv("PARSER_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+    parser_local_only = os.getenv("PARSER_LOCAL_FILES_ONLY", "false").lower() == "true"
+    try:
+        sbert_model = SentenceTransformer(parser_model_name, local_files_only=parser_local_only)
+    except Exception:
+        if parser_local_only:
+            raise
+        sbert_model = SentenceTransformer(parser_model_name, local_files_only=True)
+
+    nlp = spacy.load(os.getenv("PARSER_SPACY_MODEL", "en_core_web_sm"))
     logger.info("Models loaded successfully!")
 except Exception as e:
     logger.error(f"Error loading models: {str(e)}")

@@ -8,11 +8,13 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import cv_parser
+from matching_api import matching_router
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CV Parser NLP Service", version="1.0.0")
+app = FastAPI(title="CV Parser and Matching Service", version="1.0.0")
+app.include_router(matching_router)
 
 
 class ParseCVRequest(BaseModel):
@@ -28,7 +30,7 @@ class ParseCVResponse(BaseModel):
 
 @app.get("/")
 def root():
-    return {"message": "CV Parser NLP Service", "version": "1.0.0"}
+    return {"message": "CV Parser and Matching Service", "version": "1.0.0"}
 
 
 @app.get("/health")
